@@ -8,26 +8,17 @@
 #include <glob.h>
 #include "grep.h"
 
-const int BLKSIZE = 4096;  const int NBLK = 2047;  const int FNSIZE = 128;  const int LBSIZE = 4096;
-const int ESIZE = 256; const int GBSIZE = 256;  const int NBRA = 5;  const int KSIZE = 9;  const int CBRA = 1;
-const int CCHR = 2;  const int CDOT = 4;  const int CCL = 6;  const int NCCL = 8;  const int CDOL = 10;
-const int CEOF = 11;  const int CKET = 12;  const int CBACK = 14;  const int CCIRC = 15;  const int STAR = 01;
-const int READ = 0;  const int WRITE = 1;
-
-int  peekc, lastc, given, ninbuf, io, pflag;
-int  vflag  = 1, oflag, listf, listn, col, tfile  = -1, tline, iblock  = -1, oblock  = -1, ichanged, nleft;
+const int BLKSIZE = 4096, NBLK = 2047, FNSIZE = 128, LBSIZE = 4096, ESIZE = 256, GBSIZE = 256, NBRA = 5, CBRA = 1;
+const int CCHR = 2, CDOT = 4, CCL = 6, NCCL = 8, CDOL = 10, CEOF = 11, CKET = 12, CBACK = 14, CCIRC = 15, STAR = 01, READ = 0, WRITE = 1, BUFSIZE = 100;
+int  peekc, lastc, given, ninbuf, io, pflag, vflag  = 1, oflag, listf, listn, col, tfile  = -1, tline, iblock  = -1, oblock  = -1, ichanged, nleft;
 int  names[26], anymarks, nbra, subnewa, subolda, fchange, wrapp, bpagesize = 20;
-unsigned nlall = 128;  unsigned int  *addr1, *addr2, *dot, *dol, *zero;
-
-long  count;
+unsigned nlall = 128;  unsigned int  *addr1, *addr2, *dot, *dol, *zero; long  count;
 char  Q[] = "", T[] = "TMP", savedfile[FNSIZE], file[FNSIZE], linebuf[LBSIZE], rhsbuf[LBSIZE/2], expbuf[ESIZE+4];
 char  genbuf[LBSIZE], *nextip, *linebp, *globp, *mktemp(char *), tmpXXXXX[50] = "/tmp/eXXXXX";
-char  *tfname, *loc1, *loc2, ibuff[BLKSIZE], obuff[BLKSIZE], WRERR[]  = "WRITE ERROR", *braslist[NBRA], *braelist[NBRA];
-char  line[70];  char  *linp  = line;
-jmp_buf  savej;
-char grepbuf[GBSIZE];
+char  *tfname, *loc1, *loc2, ibuff[BLKSIZE], obuff[BLKSIZE], WRERR[]  = "WRITE ERROR", *braslist[NBRA], *braelist[NBRA], line[70],  *linp  = line, grepbuf[GBSIZE]; jmp_buf  savej;
 //added functions and variables
-char * curfile;
+char * curfile, buf[BUFSIZE], inputbuf[GBSIZE];
+int bufp = 0;
 
 int main(int argc, char *argv[]) {
   if (argc < 3) { fprintf(stderr, "Usage: ./grep search file(s)\n");  exit(1);
@@ -36,36 +27,17 @@ int main(int argc, char *argv[]) {
     const char* search_for = argv[1];
     process_dir(argv[2], search_for, search_file); // search_file: fn that reads and searches
   }
-  //printf("\nquitting...\n");
   exit(1);
 }
-
-#define BUFSIZE 100
-char buf[BUFSIZE];
-int bufp = 0;
-
 void readfile(const char* search){
-  strcpy(file, search);
-  init();
-  if ((io = open((const char*)file, 0)) < 0) {
-    lastc = '\n';
-    error(file);
-  }
-  setwide();
-  squeeze(0);
-  append(getfile, addr2);
-  exfile();
+  strcpy(file, search);  init();
+  if ((io = open((const char*)file, 0)) < 0) {    lastc = '\n';    error(file);  }
+  setwide();  squeeze(0);  append(getfile, addr2);  close(io);  io = -1;
 }
-void search_file(const char* filename, const char* searchfor) {
-  //printf("processing %s...\n", filename);
-  curfile = filename;
-  readfile(filename);
-  search(searchfor);
-}
+void search_file(const char* filename, const char* searchfor) {  curfile = filename;  readfile(filename);  search(searchfor);}
 void process_dir(const char* dir, const char* searchfor, void (*fp)(const char*, const char*)) {
   if (strchr(dir, '.') != NULL) {  search_file(dir, searchfor);  return; }  // search one file
-
-        // or search a directory of files using glob()
+  // or search a directory of files using glob()
   strcat(dir, "/**");//grabs files from directory
   glob_t results;
   memset(&results, 0, sizeof(results));
@@ -77,31 +49,13 @@ void process_dir(const char* dir, const char* searchfor, void (*fp)(const char*,
   }
   globfree(&results);
 }
-int getch_(void) {
-  char c = (bufp > 0) ? buf[--bufp] : getchar();
-  lastc = c & 0177;
-  //if (lastc == '\n') {  // uncomment if you want to see the chars
-  //  printf("getch(): newline\n");
-  //} else {
-  //printf("getch_(): %c\n", lastc);
- //}
-
-  return lastc;
-}
-void ungetch_(int c) {
-  if (bufp >= BUFSIZE) {
-    printf("ungetch: overflow\n");
-  }  else {
-    buf[bufp++] = c;
-  }
-}
-void drawline(){
-  printf("%s\n","------------");
+int getch_(void) {  char c = (bufp > 0) ? buf[--bufp] : getchar();  lastc = c & 0177;  return lastc;}
+void ungetch_(int c) {if (bufp >= BUFSIZE) {    printf("ungetch: overflow\n");  }
+else {    buf[bufp++] = c;}
 }
 void search(const char* re) {
   char buf[GBSIZE];
   snprintf(buf, sizeof(buf), "/%s\n", re);  // / and \n very important
-  //printf("g%s", buf);//prints search term
   const char* p = buf + strlen(buf) - 1;
   while (p >= buf) { ungetch_(*p--); }  global(1);
 }
@@ -155,13 +109,6 @@ int advance(char *lp, char *ep) {  char *curlp;  int i;
       case CDOT:  if (*lp++) { continue; }    return(0);
       case CDOL:  if (*lp==0) { continue; }  return(0);
       case CEOF:  loc2 = lp;  return(1);
-      case CCL:   if (cclass(ep, *lp++, 1)) {  ep += *ep;  continue; }  return(0);
-      case NCCL:  if (cclass(ep, *lp++, 0)) { ep += *ep;  continue; }  return(0);
-      case CBRA:  braslist[*ep++] = lp;  continue;
-      case CKET:  braelist[*ep++] = lp;  continue;
-      case CBACK:
-        if (braelist[i = *ep++] == 0) { error(Q); }
-        if (backref(i, lp)) { lp += braelist[i] - braslist[i];  continue; }  return(0);
       default: error(Q);
     }
   }
@@ -183,9 +130,6 @@ int backref(int i, char *lp) {  char *bp;  bp = braslist[i];
 }
 void blkio(int b, char *buf, long (*iofcn)(int, void*, unsigned long)) {
   lseek(tfile, (long)b*BLKSIZE, 0);  if ((*iofcn)(tfile, buf, BLKSIZE) != BLKSIZE) {  error(T);  }
-}
-int cclass(char *set, int c, int af) {  int n;  if (c == 0) { return(0); }  n = *set++;
-  while (--n) { if (*set++ == c) { return(af); } }  return(!af);
 }
 void compile(int eof) {  int c, cclcnt;  char *ep = expbuf, *lastep, bracket[NBRA], *bracketp = bracket;
   if ((c = getchr()) == '\n') { peekc = c;  c = eof; }
@@ -220,7 +164,7 @@ void compile(int eof) {  int c, cclcnt;  char *ep = expbuf, *lastep, bracket[NBR
     }
   }
 }
-void error(char *s) {  int c;  wrapp = 0;  listf = 0;  listn = 0;  putchr_('?');  puts_(s);
+void error(char *s) {  int c;  wrapp = 0;  listf = 0;  listn = 0;  putchr_('?');  puts_(s,0);
   count = 0;  lseek(0, (long)0, 2);  pflag = 0;  if (globp) { lastc = '\n'; }  globp = 0;  peekc = lastc;
   if(lastc) { while ((c = getchr()) != '\n' && c != EOF) { } }
   if (io > 0) { close(io);  io = -1; }  longjmp(savej, 1);
@@ -238,10 +182,6 @@ int execute(unsigned int *addr) {  char *p1, *p2 = expbuf;  int c;
   }
   do {  /* regular algorithm */   if (advance(p1, p2)) {  loc1 = p1;  return(1);  }  } while (*p1++);  return(0);
 }
-void exfile(void) {  close(io);  io = -1;  if (vflag) {
-    //putd();  putchr_('\n');
-  }
-    }
 void filename(int comm) {  char *p1, *p2;  int c;  count = 0;  c = getchr();
   if (c == '\n' || c == EOF) {
     p1 = savedfile;  if (*p1 == 0 && comm != 'f') { error(Q); }  p2 = file;  while ((*p2++ = *p1++) == 1) { }  return;
@@ -264,20 +204,16 @@ char * getblock(unsigned int atl, int iof) {  int off, bno = (atl/(BLKSIZE/2)); 
   if (oblock>=0) { blkio(oblock, obuff, (long (*)(int, void*, unsigned long))write); }
   oblock = bno;  return(obuff+off);
 }
-char inputbuf[GBSIZE];
-
 int getchr(void) {  char c;
   if ((lastc=peekc)) {  peekc = 0;  return(lastc); }
   if (globp) {  if ((lastc = *globp++) != 0) { return(lastc); }  globp = 0;  return(EOF);  }
-  //if (read(0, &c, 1) <= 0) { return(lastc = EOF); }
-  c = getch_();
-  lastc = c&0177;  return(lastc);
+  c = getch_();  lastc = c&0177;  return(lastc);
 }
 int getfile(void) {  int c;  char *lp = linebuf, *fp = nextip;
   do {
     if (--ninbuf < 0) {
       if ((ninbuf = (int)read(io, genbuf, LBSIZE)-1) < 0) {
-        if (lp>linebuf) { puts_("'\\n' appended");  *genbuf = '\n';  } else { return(EOF); }
+        if (lp>linebuf) { puts_("'\\n' appended",0);  *genbuf = '\n';  } else { return(EOF); }
       }
       fp = genbuf;  while(fp < &genbuf[ninbuf]) {  if (*fp++ & 0200) { break; }  }  fp = genbuf;
     }
@@ -291,9 +227,7 @@ char* getline_blk(unsigned int tl) {  char *bp, *lp;  int nl;  lp = linebuf;  bp
   while ((*lp++ = *bp++)) { if (--nl == 0) {  bp = getblock(tl+=(BLKSIZE/2), READ);  nl = nleft;  } }
   return(linebuf);
 }
-int getnum(void) { int r = 0, c;
-  while ((c = getchr())>='0' && c <= '9') { r = r * 10 + c - '0'; }  peekc = c;  return (r);
-}
+int getnum(void) { int r = 0, c;  while ((c = getchr())>='0' && c <= '9') { r = r * 10 + c - '0'; }  peekc = c;  return (r);}
 void global(int k) {
    char *gp;  int c;  unsigned int *a1;  char globuf[GBSIZE];
   if (globp) { error(Q); }  setwide();  squeeze(dol > zero);
@@ -305,18 +239,9 @@ void global(int k) {
   }
   if (gp == globuf) { *gp++ = 'p'; }  *gp++ = '\n';  *gp++ = 0;
   for (a1 = zero; a1 <= dol; a1++) {  *a1 &= ~01;  if (a1>=addr1 && a1<=addr2 && execute(a1)==k) { *a1 |= 01; } }
-// file grep doesn't delete
-//  if (globuf[0] == 'd' && globuf[1] == '\n' && globuf[2] == '\0') {  gdelete();  return; }  // special: g/.../d avoid n^2
   for (a1 = zero; a1 <= dol; a1++) {
     if (*a1 & 01) {  *a1 &= ~01;  dot = a1;  globp = globuf; printcommand();  a1 = zero; }
   }
-}
-void greperror(char c) {  getchr();  /* throw away '\n' */
-  snprintf(grepbuf, sizeof(grepbuf), "\'%c\' is a non-grep command", c);  puts_(grepbuf);  }
-void grepline(void) {
-//  puts_("------------------------------------ ");
-  getchr();  // throw away newline after command
-  for (int i = 0; i < 50; ++i) { putchr_('-'); }   putchr_('\n');
 }
 void init(void) {  int *markp;  close(tfile);  tline = 2;
   for (markp = names; markp < &names[26]; )  {  *markp++ = 0;  }
@@ -331,16 +256,13 @@ void newline(void) {  int c;  if ((c = getchr()) == '\n' || c == EOF) { return; 
 }
 void nonzero(void) { squeeze(1); }
 void onhup(int n) {
-  signal(SIGINT, SIG_IGN);  signal(SIGHUP, SIG_IGN);
   if (dol > zero) {  addr1 = zero+1;  addr2 = dol;  io = creat("ed.hup", 0600);  if (io > 0) { putfile(); } }
   fchange = 0;  quit(0);
 }
 void onintr(int n) { signal(SIGINT, onintr);  putchr_('\n');  lastc = '\n';  error(Q);  }
 void print(void) {  unsigned int *a1 = addr1;  nonzero();//prints found line
-
   do {  if (listn) {  count = a1 - zero;  putd();  putchr_('\t');  }
-  putsn_(curfile);
-  puts_(getline_blk(*a1++));
+  puts_(curfile,1);  puts_(getline_blk(*a1++),0);
 } while (a1 <= addr2);
   dot = addr2;  listf = 0;  listn = 0;  pflag = 0;
 }
@@ -368,12 +290,12 @@ void putfile(void) {  unsigned int *a1;  char *fp, *lp;  int n, nib = BLKSIZE;  
     for (;;) {
       if (--nib < 0) {
         n = (int)(fp-genbuf);
-        if (write(io, genbuf, n) != n) {  puts_(WRERR);  error(Q);  }  nib = BLKSIZE-1;  fp = genbuf;
+        if (write(io, genbuf, n) != n) {  puts_(WRERR,0);  error(Q);  }  nib = BLKSIZE-1;  fp = genbuf;
       }
       count++;  if ((*fp++ = *lp++) == 0) {  fp[-1] = '\n';  break; }
     }
   } while (a1 <= addr2);
-  n = (int)(fp-genbuf);  if (write(io, genbuf, n) != n) {  puts_(WRERR);  error(Q); }
+  n = (int)(fp-genbuf);  if (write(io, genbuf, n) != n) {  puts_(WRERR,0);  error(Q); }
 }
 int putline(void) {  char *bp, *lp;  int nl;  unsigned int tl;  fchange = 1;  lp = linebuf;
   tl = tline;  bp = getblock(tl, WRITE);  nl = nleft;  tl &= ~((BLKSIZE/2)-1);
@@ -383,12 +305,12 @@ int putline(void) {  char *bp, *lp;  int nl;  unsigned int tl;  fchange = 1;  lp
   }
   nl = tline;  tline += (((lp - linebuf) + 03) >> 1) & 077776;  return(nl);
 }
-void puts_(char *sp) {  col = 0;  while (*sp) { putchr_(*sp++); }  putchr_('\n');  }
-void putsn_(char *sp) {  col = 0;  while (*sp) { putchr_(*sp++); } putchr_(':'); putchr_('\t');}
-void quit(int n) { if (vflag && fchange && dol!=zero) {  fchange = 0;  error(Q);  }  unlink(tfname); exit(0); }
-void reverse(unsigned int *a1, unsigned int *a2) {  int t;
-  for (;;) {  t = *--a2;  if (a2 <= a1) { return; }  *a2 = *a1;  *a1++ = t;  }
+void puts_(char *sp, int a) {  col = 0;
+  while (*sp) {    putchr_(*sp++);  }
+  if ( a == 0 ) {putchr_('\n');} else {putchr_(':'); putchr_('\t');}
 }
+void quit(int n) {  if (vflag && fchange && dol!=zero) {    fchange = 0;    error(Q);  }  unlink(tfname); exit(0);}
+void reverse(unsigned int *a1, unsigned int *a2) {  int t; for (;;) {  t = *--a2;  if (a2 <= a1) { return; }  *a2 = *a1;  *a1++ = t;  }}
 void setnoaddr(void) { if (given) { error(Q); } }
 void setwide(void) { if (!given) { addr1 = zero + (dol>zero);  addr2 = dol; } }
 void squeeze(int i) { if (addr1 < zero+i || addr2 > dol || addr1 > addr2) { error(Q); } }
